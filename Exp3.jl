@@ -11,20 +11,20 @@ using LambertW
 struct UpperConfidenceBound
     n_arms::Int32
     counts::Vector{Int32}
-    values::Vector{Float32}
+    values::Vector{Float64}
     total_pulls::Vector{Int32}
-    reward::Vector{Float32}
+    reward::Vector{Float64}
 end
 
 function UpperConfidenceBound(n_arms)
-    UpperConfidenceBound(n_arms, zeros(Int32,n_arms), zeros(Float32,n_arms), zeros(Int32,1), zeros(Float32,1))
+    UpperConfidenceBound(n_arms, zeros(Int32,n_arms), zeros(Float64,n_arms), zeros(Int32,1), zeros(Float64,1))
 end
 
 function select_arm(ucb::UpperConfidenceBound)
-    ucb_values = Vector{Float32}(undef, ucb.n_arms)
-    total_pulls_log :: Float32 = 2*Float32(2.1) * log(ucb.total_pulls[1])  # Precompute log to avoid multiple calculations
-    average_reward :: Float32 = 0.0
-    confidence_interval :: Float32 = 0.0
+    ucb_values = Vector{Float64}(undef, ucb.n_arms)
+    total_pulls_log :: Float64 = 2*Float64(2.1) * log(ucb.total_pulls[1])  # Precompute log to avoid multiple calculations
+    average_reward :: Float64 = 0.0
+    confidence_interval :: Float64 = 0.0
     @inbounds for arm in 1:ucb.n_arms
         if ucb.counts[arm] == 0
             return arm  # If an arm hasn't been pulled, select it
@@ -34,88 +34,117 @@ function select_arm(ucb::UpperConfidenceBound)
     return argmin(ucb_values)
 end
 
-function update!(ucb::UpperConfidenceBound, chosen_arm::Int32, reward::Float32)
+function update!(ucb::UpperConfidenceBound, chosen_arm::Int32, reward::Float64)
     ucb.counts[chosen_arm] = ucb.counts[chosen_arm] +1
     ucb.total_pulls[1] = ucb.total_pulls[1] +1
     ucb.reward[1] = ucb.reward[1]+reward
-    ucb.values[chosen_arm] = ((ucb.counts[chosen_arm] - Float32(1.0)) / ucb.counts[chosen_arm]) * ucb.values[chosen_arm] + (Float32(1.0) / ucb.counts[chosen_arm]) * reward
+    ucb.values[chosen_arm] = ((ucb.counts[chosen_arm] - Float64(1.0)) / ucb.counts[chosen_arm]) * ucb.values[chosen_arm] + (Float64(1.0) / ucb.counts[chosen_arm]) * reward
 end
 
 # EXP3 Algorithm Implementation
 struct EXP3
     num_arms::Int32
-    weights::Vector{Float32}
-    probs::Vector{Float32}
+    weights::Vector{Float64}
+    probs::Vector{Float64}
     counts::Vector{Int32}
-    reward::Vector{Float32}
-    cumu_reward::Vector{Float32}
-    importance_estimator::Vector{Float32}
+    reward::Vector{Float64}
+    cumu_reward::Vector{Float64}
+    importance_estimator::Vector{Float64}
 end
 
 function EXP3(num_arms)
-    EXP3(num_arms, ones(Float32,num_arms), ones(Float32,num_arms) ./ num_arms, zeros(Int32,num_arms), zeros(Float32,1), zeros(Float32,num_arms),zeros(Float32,num_arms))
+    EXP3(num_arms, ones(Float64,num_arms), ones(Float64,num_arms) ./ num_arms, zeros(Int32,num_arms), zeros(Float64,1), zeros(Float64,num_arms),zeros(Float64,num_arms))
 end
 
 # EXP3+ Algorithm Implementation
 struct EXP3plus
     num_arms::Int32
-    weights::Vector{Float32}
-    probs::Vector{Float32}
-    realprobs::Vector{Float32}
+    weights::Vector{Float64}
+    probs::Vector{Float64}
+    realprobs::Vector{Float64}
     counts::Vector{Int32}
-    reward::Vector{Float32}
-    cumu_reward::Vector{Float32}
-    unajusted_reward::Vector{Float32}
-    hedging_weights::Vector{Float32}
+    reward::Vector{Float64}
+    cumu_reward::Vector{Float64}
+    unajusted_reward::Vector{Float64}
+    hedging_weights::Vector{Float64}
 end
 
 function EXP3plus(num_arms)
-    EXP3plus(num_arms, ones(Float32,num_arms), ones(Float32,num_arms) ./ num_arms, ones(Float32,num_arms) ./ num_arms, zeros(Int32,num_arms), zeros(Float32,1), zeros(Float32,num_arms),zeros(Float32,num_arms),zeros(Float32,num_arms))
+    EXP3plus(num_arms, ones(Float64,num_arms), ones(Float64,num_arms) ./ num_arms, ones(Float64,num_arms) ./ num_arms, zeros(Int32,num_arms), zeros(Float64,1), zeros(Float64,num_arms),zeros(Float64,num_arms),zeros(Float64,num_arms))
 end
 function select_arm(exp3::EXP3)
-    sum_weights :: Float32 = sum(exp3.weights)  # Avoid recomputing this in the loop
-    exp3.probs .= exp3.weights ./ sum_weights
+    max_weights :: Float64 = maximum(exp3.weights)  # Avoid recomputing this in the loop
+    normal_weights = exp3.weights.- max_weights.+0.0
+    max_index :: Int32 = argmax(normal_weights) 
+    surrogate_weights = zeros(Float64,exp3.num_arms)
+    if minimum(normal_weights) < -900    # Avoid underflow
+        surrogate_weights = 1e-10 * ones(Float64,exp3.num_arms) 
+        surrogate_weights[max_index] = 1.0 
+    else
+        for i in 1:exp3.num_arms
+            surrogate_weights[i] = exp(normal_weights[i])
+        end
+    end     
+    sum_weights :: Float64 = sum(surrogate_weights)  # Avoid recomputing this in the loop
+    exp3.probs .= surrogate_weights ./ sum_weights
     return rand(Categorical(exp3.probs))  # Categorical sampling
 end
 
 function select_arm(exp3plus::EXP3plus)
-    sum_weights :: Float32 = sum(exp3plus.weights)  # Avoid recomputing this in the loop
-    exp3plus.probs .= exp3plus.weights ./ sum_weights
-    sum_hedge_weights :: Float32 = sum(exp3plus.hedging_weights)  # Avoid recomputing this in the loop
+    max_weights :: Float64 = maximum(exp3plus.weights)  # Avoid recomputing this in the loop
+    normal_weights = exp3plus.weights.- max_weights.+0.0
+    max_index :: Int32 = argmax(normal_weights) 
+    surrogate_weights = zeros(Float64,exp3plus.num_arms)
+    if minimum(normal_weights) < -900    # Avoid underflow
+        surrogate_weights = 1e-10 * ones(Float64,exp3plus.num_arms) 
+        surrogate_weights[max_index] = 1.0 
+    else
+        for i in 1:exp3plus.num_arms
+            surrogate_weights[i] = exp(normal_weights[i])
+        end
+    end     
+    sum_weights :: Float64 = sum(surrogate_weights)  # Avoid recomputing this in the loop
+    exp3plus.probs .= surrogate_weights ./ sum_weights
+    sum_hedge_weights :: Float64 = sum(exp3plus.hedging_weights)  # Avoid recomputing this in the loop
     exp3plus.realprobs .= (1.0- sum_hedge_weights) * exp3plus.probs .+ exp3plus.hedging_weights
     return rand(Categorical(exp3plus.realprobs))  # Categorical sampling
 end
 
-function update!(exp3::EXP3, chosen_arm::Int32, reward::Float32, eta::Float32, method::String)
+function update!(exp3::EXP3, chosen_arm::Int32, reward::Float64, eta::Float64, method::String)
     @inbounds begin
         exp3.counts[chosen_arm] += 1
         exp3.reward[1] += reward
         estimated_reward = reward / exp3.probs[chosen_arm]
+        if exp3.cumu_reward[chosen_arm] != NaN
+            exp3.cumu_reward[chosen_arm] += estimated_reward
+        end
         exp3.cumu_reward[chosen_arm] += estimated_reward
         if method == "FTRL"
             @simd  for i in 1:exp3.num_arms
-                @inbounds exp3.weights[i] = exp(exp3.cumu_reward[i] * -eta)
+                @inbounds exp3.weights[i] = exp3.cumu_reward[i] * -eta
             end
         else
-            exp3.weights[chosen_arm] *= exp(-eta * estimated_reward)
+            if exp3.weights[chosen_arm]!= NaN 
+                exp3.weights[chosen_arm] += -eta * estimated_reward
+            end
         end
     end
 end
 
-function update!(exp3plus::EXP3plus, chosen_arm::Int32, reward::Float32, eta::Float32, method::String,round::Int64)
+function update!(exp3plus::EXP3plus, chosen_arm::Int32, reward::Float64, eta::Float64, method::String,round::Int64)
     @inbounds begin
         exp3plus.counts[chosen_arm] += 1
         exp3plus.reward[1] += reward
         exp3plus.unajusted_reward[chosen_arm] += reward
-        gap = zeros(Float32,exp3plus.num_arms)
-        ucb = zeros(Float32,exp3plus.num_arms)
-        lcb = zeros(Float32,exp3plus.num_arms)
+        gap = zeros(Float64,exp3plus.num_arms)
+        ucb = zeros(Float64,exp3plus.num_arms)
+        lcb = zeros(Float64,exp3plus.num_arms)
         ucb_inf = Inf 
         if method == "Later"            
             estimated_reward = reward / exp3plus.realprobs[chosen_arm]
             exp3plus.cumu_reward[chosen_arm] += estimated_reward            
             @simd  for i in 1:exp3plus.num_arms
-                @inbounds exp3plus.weights[i] = exp(exp3plus.cumu_reward[i] * -eta)
+                @inbounds exp3plus.weights[i] = exp3plus.cumu_reward[i] * -eta
             end
             @simd  for i in 1:exp3plus.num_arms
                 @inbounds ucb[i] = min(1.0,  exp3plus.unajusted_reward[i]/exp3plus.counts[i] + sqrt(3*log(round*exp3plus.num_arms^(1/3))/(2*exp3plus.counts[i])))
@@ -134,16 +163,16 @@ function update!(exp3plus::EXP3plus, chosen_arm::Int32, reward::Float32, eta::Fl
     end
 end
 # Running UCB Algorithm
-function run_ucb_algorithm(tid::Int32,monte::Int32,n_arms::Int32, n_rounds::Int32, reward_distributions::Vector{Float32}, rewards::Vector{Float32}, pulls::Matrix{Float32},name::String,randomness::Vector{Float32})
+function run_ucb_algorithm(tid::Int32,monte::Int32,n_arms::Int32, n_rounds::Int32, reward_distributions::Vector{Float64}, rewards::Vector{Float64}, pulls::Matrix{Float64},name::String,randomness::Vector{Float64})
     ucb = UpperConfidenceBound(n_arms)
     chosen_arm ::Int32 = 0
-    reward ::Float32 = 0.0
+    reward ::Float64 = 0.0
     for i in 1:n_rounds
         if i % 1000000 == 0
             println("Thread $tid in Monte Carlo iteration $monte inner round $i of task $name")
         end  
         chosen_arm = select_arm(ucb)
-        reward = (randomness[i] < reward_distributions[chosen_arm]) * Float32(2.0)  # Optimize random binomial
+        reward = (randomness[i] < reward_distributions[chosen_arm]) * Float64(2.0)  # Optimize random binomial
         update!(ucb, chosen_arm, reward)
         rewards[i] += ucb.reward[1]
         pulls[i, :] .= pulls[i, :] .+ ucb.counts
@@ -151,23 +180,23 @@ function run_ucb_algorithm(tid::Int32,monte::Int32,n_arms::Int32, n_rounds::Int3
 end
 
 # Running EXP3 Algorithm
-function run_exp3_algorithm(tid::Int32, monte::Int32,n_arms::Int32, n_rounds::Int32, reward_distributions::Vector{Float32}, type::Int32, rewards::Vector{Float32}, pulls::Matrix{Float32},name::String,randomness::Vector{Float32},importance_estimator::Matrix{Float32}, weights::Matrix{Float32}, test_estimator::Matrix{Float32})
+function run_exp3_algorithm(tid::Int32, monte::Int32,n_arms::Int32, n_rounds::Int32, reward_distributions::Vector{Float64}, type::Int32, rewards::Vector{Float64}, pulls::Matrix{Float64},name::String,randomness::Vector{Float64},importance_estimator::Matrix{Float64}, weights::Matrix{Float64}, test_estimator::Matrix{Float64})
     exp3 = EXP3(n_arms)
-    eta::Float32 = 2*sqrt(log(n_arms)/n_rounds)
+    eta::Float64 = 2*sqrt(log(n_arms)/n_rounds)
     chosen_arm::Int32 = 0
-    reward::Float32 = 0.0
-    estimator = zeros(Float32,exp3.num_arms)
+    reward::Float64 = 0.0
+    estimator = zeros(Float64,exp3.num_arms)
     for i in 1:n_rounds
         chosen_arm = select_arm(exp3)
         weights[i,:] = exp3.probs .+ 0.0
-        reward = (randomness[i] < reward_distributions[chosen_arm]) * Float32(2.0)  # Optimize random binomial
+        reward = (randomness[i] < reward_distributions[chosen_arm]) * Float64(2.0)  # Optimize random binomial
         if i % 1000000 == 0
             println("Thread $tid in Monte Carlo iteration $monte inner round $i of task $name")
         end     
         if type == 1
-            update!(exp3, chosen_arm, reward, Float32(2*sqrt(log(n_arms)/i)), "FTRL")
+            update!(exp3, chosen_arm, reward, Float64(2*sqrt(log(n_arms)/i)), "FTRL")
         elseif type == 2
-            update!(exp3, chosen_arm, reward, Float32(2*sqrt(log(n_arms)/i)), "OMD")
+            update!(exp3, chosen_arm, reward, Float64(2*sqrt(log(n_arms)/i)), "OMD")
         else
             update!(exp3, chosen_arm, reward, eta, "OMD")
         end
@@ -180,11 +209,11 @@ function run_exp3_algorithm(tid::Int32, monte::Int32,n_arms::Int32, n_rounds::In
 end
 
 # Running EXP3plus Algorithm
-function run_exp3plus_algorithm(tid::Int32,monte::Int32, n_arms::Int32, n_rounds::Int32, reward_distributions::Vector{Float32}, rewards::Vector{Float32}, pulls::Matrix{Float32},name::String,randomness::Vector{Float32},importance_estimator::Matrix{Float32}, weights::Matrix{Float32}, test_estimator::Matrix{Float32})
+function run_exp3plus_algorithm(tid::Int32,monte::Int32, n_arms::Int32, n_rounds::Int32, reward_distributions::Vector{Float64}, rewards::Vector{Float64}, pulls::Matrix{Float64},name::String,randomness::Vector{Float64},importance_estimator::Matrix{Float64}, weights::Matrix{Float64}, test_estimator::Matrix{Float64})
     exp3plus = EXP3plus(n_arms)    
     chosen_arm::Int32 = 0
-    reward::Float32 = 0.0
-    estimator = zeros(Float32,exp3plus.num_arms)
+    reward::Float64 = 0.0
+    estimator = zeros(Float64,exp3plus.num_arms)
     for i in 1:n_rounds      
         if i % 1000000 == 0
             println("Thread $tid in Monte Carlo iteration $monte inner round $i of task $name")
@@ -192,15 +221,15 @@ function run_exp3plus_algorithm(tid::Int32,monte::Int32, n_arms::Int32, n_rounds
         if i> exp3plus.num_arms
             chosen_arm = select_arm(exp3plus)
             weights[i,:] = exp3plus.realprobs .+ 0.0
-            reward = (randomness[i] < reward_distributions[chosen_arm]) * Float32(2.0)  # Optimize random binomial
-            update!(exp3plus, chosen_arm, reward, Float32(0.5*sqrt(log(n_arms)/(i*n_arms))),"Later",i)
+            reward = (randomness[i] < reward_distributions[chosen_arm]) * Float64(2.0)  # Optimize random binomial
+            update!(exp3plus, chosen_arm, reward, Float64(0.5*sqrt(log(n_arms)/(i*n_arms))),"Later",i)
             rewards[i] += exp3plus.reward[1]
             pulls[i, :] .= pulls[i, :] .+ exp3plus.counts
         else
             chosen_arm = i 
             weights[i,:] = exp3plus.realprobs .+ 0.0
-            reward = (randomness[i] < reward_distributions[chosen_arm]) * Float32(2.0)  # Optimize random binomial
-            update!(exp3plus, chosen_arm, reward, Float32(0.5*sqrt(log(n_arms)/(i*n_arms))),"Initial",i)
+            reward = (randomness[i] < reward_distributions[chosen_arm]) * Float64(2.0)  # Optimize random binomial
+            update!(exp3plus, chosen_arm, reward, Float64(0.5*sqrt(log(n_arms)/(i*n_arms))),"Initial",i)
             rewards[i] += exp3plus.reward[1]
             pulls[i, :] .= pulls[i, :] .+ exp3plus.counts
         end
@@ -213,21 +242,21 @@ end
 # Tsallis entropy algorithm 
 struct Tsallis
     num_arms::Int32
-    probs::Vector{Float32}
+    probs::Vector{Float64}
     counts::Vector{Int32}
-    reward::Vector{Float32}
-    cumu_reward::Vector{Float32}
-    importance_estimator::Vector{Float32}
-    warmup::Vector{Float32}
+    reward::Vector{Float64}
+    cumu_reward::Vector{Float64}
+    importance_estimator::Vector{Float64}
+    warmup::Vector{Float64}
 end
 function Tsallis(num_arms)
-    Tsallis(num_arms, ones(Float32,num_arms) ./ num_arms, zeros(Int32,num_arms), zeros(Float32,1), zeros(Float32,num_arms),zeros(Float32,num_arms), ones(Float32,1)*Float32(-0.1))
+    Tsallis(num_arms, ones(Float64,num_arms) ./ num_arms, zeros(Int32,num_arms), zeros(Float64,1), zeros(Float64,num_arms),zeros(Float64,num_arms), ones(Float64,1)*Float64(-0.1))
 end
 function select_arm(tsallis::Tsallis)
     return rand(Categorical(tsallis.probs))  # Categorical sampling
 end
 
-function update!(tsallis::Tsallis, chosen_arm::Int32, reward::Float32, eta::Float32)
+function update!(tsallis::Tsallis, chosen_arm::Int32, reward::Float64, eta::Float64)
     @inbounds begin
         tsallis.counts[chosen_arm] += 1
         tsallis.reward[1] += reward
@@ -237,13 +266,13 @@ function update!(tsallis::Tsallis, chosen_arm::Int32, reward::Float32, eta::Floa
         # println("1234",tsallis.probs)      
     end   
 end
-function newton!(tsallis::Tsallis, initial::Float32, eta::Float32)
-    temp = zeros(Float32,tsallis.num_arms)
-    prev = ones(Float32,tsallis.num_arms)
+function newton!(tsallis::Tsallis, initial::Float64, eta::Float64)
+    temp = zeros(Float64,tsallis.num_arms)
+    prev = ones(Float64,tsallis.num_arms)
 
     # println(tsallis.cumu_reward)
     # if sum(tsallis.cumu_reward)< 1e-9
-    #     return ones(Float32,tsallis.num_arms)./ tsallis.num_arms
+    #     return ones(Float64,tsallis.num_arms)./ tsallis.num_arms
     # end
     @inbounds begin
         while abs(sum(temp)-1.0) > 1e-6            
@@ -264,19 +293,19 @@ function newton!(tsallis::Tsallis, initial::Float32, eta::Float32)
 end
 
 # Running Tsallisinf Algorithm
-function run_Tsallisinf_algorithm(tid::Int32, monte::Int32,n_arms::Int32, n_rounds::Int32, reward_distributions::Vector{Float32}, rewards::Vector{Float32}, pulls::Matrix{Float32},name::String,randomness::Vector{Float32},importance_estimator::Matrix{Float32}, weights::Matrix{Float32}, test_estimator::Matrix{Float32})
+function run_Tsallisinf_algorithm(tid::Int32, monte::Int32,n_arms::Int32, n_rounds::Int32, reward_distributions::Vector{Float64}, rewards::Vector{Float64}, pulls::Matrix{Float64},name::String,randomness::Vector{Float64},importance_estimator::Matrix{Float64}, weights::Matrix{Float64}, test_estimator::Matrix{Float64})
     tsallis = Tsallis(n_arms)
     chosen_arm::Int32 = 0
-    reward::Float32 = 0.0
-    estimator = zeros(Float32,tsallis.num_arms)
+    reward::Float64 = 0.0
+    estimator = zeros(Float64,tsallis.num_arms)
     for i in 1:n_rounds
         chosen_arm = select_arm(tsallis)
         weights[i,:] = tsallis.probs .+ 0.0
-        reward = (randomness[i] < reward_distributions[chosen_arm]) * Float32(2.0)  # Optimize random binomial
+        reward = (randomness[i] < reward_distributions[chosen_arm]) * Float64(2.0)  # Optimize random binomial
         if i % 1000000 == 0
             println("Thread $tid in Monte Carlo iteration $monte inner round $i of task $name")
         end     
-        update!(tsallis, chosen_arm, reward, Float32(2*sqrt(1.0/i)))
+        update!(tsallis, chosen_arm, reward, Float64(2*sqrt(1.0/i)))
         rewards[i] += tsallis.reward[1]
         pulls[i, :] .= pulls[i, :] .+ tsallis.counts
         importance_estimator[i,:] = tsallis.cumu_reward .- estimator .+ 0.0
@@ -290,19 +319,19 @@ end
 # Shinji's log-barrier
 struct Shinji
     num_arms::Int32
-    probs::Vector{Float32}
+    probs::Vector{Float64}
     counts::Vector{Int32}
-    reward::Vector{Float32}
-    cumu_reward::Vector{Float32}
-    importance_estimator::Vector{Float32}
-    warmup::Vector{Float32}
-    gamma :: Vector{Float32}
-    m :: Vector{Float32}
-    B :: Float32
-    eta :: Float32
+    reward::Vector{Float64}
+    cumu_reward::Vector{Float64}
+    importance_estimator::Vector{Float64}
+    warmup::Vector{Float64}
+    gamma :: Vector{Float64}
+    m :: Vector{Float64}
+    B :: Float64
+    eta :: Float64
 end
 function Shinji(num_arms)
-    Shinji(num_arms, ones(Float32,num_arms) ./ num_arms, zeros(Int32,num_arms), zeros(Float32,1), zeros(Float32,num_arms),zeros(Float32,num_arms), ones(Float32,1), ones(Float32,num_arms).* Float32(2.0), ones(Float32,num_arms).* Float32(0.5), Float32(1/(log(n_rounds))), Float32(1/4))
+    Shinji(num_arms, ones(Float64,num_arms) ./ num_arms, zeros(Int32,num_arms), zeros(Float64,1), zeros(Float64,num_arms),zeros(Float64,num_arms), ones(Float64,1), ones(Float64,num_arms).* Float64(2.0), ones(Float64,num_arms).* Float64(0.5), Float64(1/(log(n_rounds))), Float64(1/4))
 end
 function select_arm(shinji::Shinji)
     return rand(Categorical(shinji.probs))  # Categorical sampling
@@ -312,8 +341,8 @@ function update!(shinji::Shinji)
     shinji.probs .= newton!(shinji).+0.0
 end
 function newton!(shinji::Shinji)
-    temp = zeros(Float32,shinji.num_arms)
-    temp1 = zeros(Float32,shinji.num_arms)
+    temp = zeros(Float64,shinji.num_arms)
+    temp1 = zeros(Float64,shinji.num_arms)
     initial = minimum(shinji.cumu_reward.+shinji.m)-1e-1
     @inbounds begin
         while abs(sum(temp)-1.0) > 1e-6
@@ -331,7 +360,7 @@ function newton!(shinji::Shinji)
     # print(temp)
     return temp./ sum(temp) 
 end
-function update!!(shinji::Shinji, chosen_arm::Int32, reward::Float32)
+function update!!(shinji::Shinji, chosen_arm::Int32, reward::Float64)
     @inbounds begin
         shinji.counts[chosen_arm] += 1
         shinji.reward[1] += reward
@@ -342,7 +371,7 @@ function update!!(shinji::Shinji, chosen_arm::Int32, reward::Float32)
             end
         end
         shinji.cumu_reward .= shinji.cumu_reward .+ shinji.importance_estimator.+0.0
-        v = zeros(Float32,shinji.num_arms)
+        v = zeros(Float64,shinji.num_arms)
         for i in 1:shinji.num_arms
             if i == chosen_arm
                 v[i] = (reward - shinji.m[i])^(2)*(1-shinji.probs[i])^2
@@ -363,11 +392,11 @@ function update!!(shinji::Shinji, chosen_arm::Int32, reward::Float32)
     end
 end
 # Running Shinji Algorithm
-function run_Shinji_algorithm(tid::Int32, monte::Int32,n_arms::Int32, n_rounds::Int32, reward_distributions::Vector{Float32}, rewards::Vector{Float32}, pulls::Matrix{Float32},name::String,randomness::Vector{Float32},importance_estimator::Matrix{Float32}, weights::Matrix{Float32}, test_estimator::Matrix{Float32})
+function run_Shinji_algorithm(tid::Int32, monte::Int32,n_arms::Int32, n_rounds::Int32, reward_distributions::Vector{Float64}, rewards::Vector{Float64}, pulls::Matrix{Float64},name::String,randomness::Vector{Float64},importance_estimator::Matrix{Float64}, weights::Matrix{Float64}, test_estimator::Matrix{Float64})
     shinji = Shinji(n_arms)
     chosen_arm::Int32 = 0
-    reward::Float32 = 0.0
-    estimator = zeros(Float32,shinji.num_arms)
+    reward::Float64 = 0.0
+    estimator = zeros(Float64,shinji.num_arms)
     for i in 1:n_rounds
         if i % 1000000 == 0
             println("Thread $tid in Monte Carlo iteration $monte inner round $i of task $name")
@@ -375,7 +404,7 @@ function run_Shinji_algorithm(tid::Int32, monte::Int32,n_arms::Int32, n_rounds::
         update!(shinji)
         chosen_arm = select_arm(shinji)
         weights[i,:] = shinji.probs .+ 0.0
-        reward = (randomness[i] < reward_distributions[chosen_arm]) * Float32(2.0)  # Optimize random binomial
+        reward = (randomness[i] < reward_distributions[chosen_arm]) * Float64(2.0)  # Optimize random binomial
         update!!(shinji, chosen_arm, reward)        
         rewards[i] += shinji.reward[1]
         pulls[i, :] .= pulls[i, :] .+ shinji.counts
@@ -389,31 +418,31 @@ end
 # # Tiancheng's FTRL
 # struct Tiancheng    
 #     num_arms::Int32
-#     probs::Vector{Float32}
+#     probs::Vector{Float64}
 #     counts::Vector{Int32}
-#     reward::Vector{Float32}
-#     cumu_reward::Vector{Float32}
-#     importance_estimator::Vector{Float32}
-#     warmup::Vector{Float32}
-#     gamma :: Vector{Float32}
-#     sum_past :: Vector{Float32}
+#     reward::Vector{Float64}
+#     cumu_reward::Vector{Float64}
+#     importance_estimator::Vector{Float64}
+#     warmup::Vector{Float64}
+#     gamma :: Vector{Float64}
+#     sum_past :: Vector{Float64}
 # end
 # function Tiancheng(num_arms,n_rounds)
-#     Tiancheng(num_arms, ones(Float32,num_arms) ./ num_arms, zeros(Int32,num_arms), zeros(Float32,1), zeros(Float32,num_arms),zeros(Float32,num_arms), ones(Float32,1)*Float32(5), ones(Float32,num_arms).* Float32(sqrt(1/log(n_rounds))), zeros(Float32,num_arms))
+#     Tiancheng(num_arms, ones(Float64,num_arms) ./ num_arms, zeros(Int32,num_arms), zeros(Float64,1), zeros(Float64,num_arms),zeros(Float64,num_arms), ones(Float64,1)*Float64(5), ones(Float64,num_arms).* Float64(sqrt(1/log(n_rounds))), zeros(Float64,num_arms))
 # end
 # function select_arm(tiancheng::Tiancheng)
 #     return rand(Categorical(tiancheng.probs))  # Categorical sampling
 # end
 
-# function update!(tiancheng::Tiancheng, initial::Float32)
+# function update!(tiancheng::Tiancheng, initial::Float64)
 #     tiancheng.probs .= newton!(tiancheng, initial).+0.0
 # end
-# function newton!(tiancheng::Tiancheng, initial::Float32)
+# function newton!(tiancheng::Tiancheng, initial::Float64)
 #     temp = zeros(Float64,tiancheng.num_arms)
 #     temp1 = zeros(Float64,tiancheng.num_arms)   
-#     temp2 = zeros(Float32,tiancheng.num_arms)
+#     temp2 = zeros(Float64,tiancheng.num_arms)
 #     if sum(tiancheng.cumu_reward)< 1e-9
-#         return ones(Float32,tiancheng.num_arms)./ tiancheng.num_arms
+#         return ones(Float64,tiancheng.num_arms)./ tiancheng.num_arms
 #     end
 #     @inbounds begin
 #         while abs(sum(temp)-1.0) > 1e-6           
@@ -427,12 +456,12 @@ end
 #         end
 #     end
 #     @simd for i in 1:tiancheng.num_arms
-#         @inbounds temp2[i] = Float32((162*log(tiancheng.num_arms)/tiancheng.gamma[i])/lambertw((162*log(tiancheng.num_arms)/tiancheng.gamma[i])*exp((tiancheng.cumu_reward[i]-initial)/tiancheng.gamma[i]),0))
+#         @inbounds temp2[i] = Float64((162*log(tiancheng.num_arms)/tiancheng.gamma[i])/lambertw((162*log(tiancheng.num_arms)/tiancheng.gamma[i])*exp((tiancheng.cumu_reward[i]-initial)/tiancheng.gamma[i]),0))
 #     end
 #     tiancheng.warmup[1] = initial
 #     return temp2 ./ sum(temp2) 
 # end
-# function update!!(tiancheng::Tiancheng, chosen_arm::Int32, reward::Float32, n_rounds::Int32)
+# function update!!(tiancheng::Tiancheng, chosen_arm::Int32, reward::Float64, n_rounds::Int32)
 #     @inbounds begin
 #         tiancheng.counts[chosen_arm] += 1
 #         tiancheng.reward[1] += reward
@@ -453,11 +482,11 @@ end
 #     end
 # end
 # # Running Tiancheng Algorithm
-# function run_Tiancheng_algorithm(tid::Int32, monte::Int32,n_arms::Int32, n_rounds::Int32, reward_distributions::Vector{Float32}, rewards::Vector{Float32}, pulls::Matrix{Float32},name::String,randomness::Vector{Float32},importance_estimator::Matrix{Float32}, weights::Matrix{Float32}, test_estimator::Matrix{Float32})
+# function run_Tiancheng_algorithm(tid::Int32, monte::Int32,n_arms::Int32, n_rounds::Int32, reward_distributions::Vector{Float64}, rewards::Vector{Float64}, pulls::Matrix{Float64},name::String,randomness::Vector{Float64},importance_estimator::Matrix{Float64}, weights::Matrix{Float64}, test_estimator::Matrix{Float64})
 #     tiancheng = Tiancheng(n_arms,n_rounds)
 #     chosen_arm::Int32 = 0
-#     reward::Float32 = 0.0
-#     estimator = zeros(Float32,tiancheng.num_arms)
+#     reward::Float64 = 0.0
+#     estimator = zeros(Float64,tiancheng.num_arms)
 #     for i in 1:n_rounds
 #         if i % 1000000 == 0
 #             println("Thread $tid in Monte Carlo iteration $monte inner round $i of task $name")
@@ -465,7 +494,7 @@ end
 #         update!(tiancheng,tiancheng.warmup[1])
 #         chosen_arm = select_arm(tiancheng)
 #         weights[i,:] = tiancheng.probs .+ 0.0
-#         reward = (randomness[i] < reward_distributions[chosen_arm]) * Float32(2.0)  # Optimize random binomial
+#         reward = (randomness[i] < reward_distributions[chosen_arm]) * Float64(2.0)  # Optimize random binomial
 #         update!!(tiancheng, chosen_arm, reward, n_rounds)
 #         rewards[i] += tiancheng.reward[1]
 #         pulls[i, :] .= pulls[i, :] .+ tiancheng.counts
@@ -478,29 +507,29 @@ end
 # # Broad's FTRL
 # struct Broad   
 #     num_arms::Int32
-#     probs::Vector{Float32}
+#     probs::Vector{Float64}
 #     counts::Vector{Int32}
-#     reward::Vector{Float32}
-#     cumu_reward::Vector{Float32}
-#     importance_estimator::Vector{Float32}
-#     warmup::Vector{Float32}
+#     reward::Vector{Float64}
+#     cumu_reward::Vector{Float64}
+#     importance_estimator::Vector{Float64}
+#     warmup::Vector{Float64}
 # end
 # function Broad(num_arms)
-#     Broad(num_arms, ones(Float32,num_arms) ./ num_arms, zeros(Int32,num_arms), zeros(Float32,1), zeros(Float32,num_arms),zeros(Float32,num_arms), ones(Float32,1)*Float32(1.0))
+#     Broad(num_arms, ones(Float64,num_arms) ./ num_arms, zeros(Int32,num_arms), zeros(Float64,1), zeros(Float64,num_arms),zeros(Float64,num_arms), ones(Float64,1)*Float64(1.0))
 # end
 # function select_arm(broad::Broad)
 #     return rand(Categorical(broad.probs))  # Categorical sampling
 # end
 
-# function update!(broad::Broad, initial::Float32, eta::Float32)
+# function update!(broad::Broad, initial::Float64, eta::Float64)
 #     broad.probs .= newton!(broad, initial, eta).+0.0
 # end
-# function newton!(broad::Broad, initial::Float32, eta::Float32)
+# function newton!(broad::Broad, initial::Float64, eta::Float64)
 #     temp = zeros(Float64,tiancheng.num_arms)
 #     temp1 = zeros(Float64,tiancheng.num_arms)   
-#     temp2 = zeros(Float32,tiancheng.num_arms)
+#     temp2 = zeros(Float64,tiancheng.num_arms)
 #     if sum(tiancheng.cumu_reward)< 1e-9
-#         return ones(Float32,tiancheng.num_arms)./ tiancheng.num_arms
+#         return ones(Float64,tiancheng.num_arms)./ tiancheng.num_arms
 #     end
 #     @inbounds begin
 #         while abs(sum(temp)-1.0) > 1e-6           
@@ -512,12 +541,12 @@ end
 #         end
 #     end
 #     @simd for i in 1:tiancheng.num_arms
-#         @inbounds temp2[i] = Float32((162*log(tiancheng.num_arms)/tiancheng.gamma[i])/lambertw((162*log(tiancheng.num_arms)/tiancheng.gamma[i])*exp((tiancheng.cumu_reward[i]-initial)/tiancheng.gamma[i]),0))
+#         @inbounds temp2[i] = Float64((162*log(tiancheng.num_arms)/tiancheng.gamma[i])/lambertw((162*log(tiancheng.num_arms)/tiancheng.gamma[i])*exp((tiancheng.cumu_reward[i]-initial)/tiancheng.gamma[i]),0))
 #     end
 #     tiancheng.warmup[1] = initial
 #     return temp2 ./ sum(temp2) 
 # end
-# function update!!(broad ::Broad, chosen_arm::Int32, reward::Float32, n_rounds::Int32)
+# function update!!(broad ::Broad, chosen_arm::Int32, reward::Float64, n_rounds::Int32)
 #     @inbounds begin
 #         broad.counts[chosen_arm] += 1
 #         broad.reward[1] += reward
@@ -532,24 +561,24 @@ end
 #     end
 # end
 # # Running Broad Algorithm
-# function run_Broad_algorithm(tid::Int32, monte::Int32,n_arms::Int32, n_rounds::Int32, reward_distributions::Vector{Float32}, rewards::Vector{Float32}, pulls::Matrix{Float32},name::String,randomness::Vector{Float32},importance_estimator::Matrix{Float32}, weights::Matrix{Float32}, test_estimator::Matrix{Float32})
+# function run_Broad_algorithm(tid::Int32, monte::Int32,n_arms::Int32, n_rounds::Int32, reward_distributions::Vector{Float64}, rewards::Vector{Float64}, pulls::Matrix{Float64},name::String,randomness::Vector{Float64},importance_estimator::Matrix{Float64}, weights::Matrix{Float64}, test_estimator::Matrix{Float64})
 #     broad = Broad(n_arms)
 #     chosen_arm::Int32 = 0
-#     reward::Float32 = 0.0
-#     estimator = zeros(Float32,tiancheng.num_arms)
-#     init :: Float32 = 1.0 
+#     reward::Float64 = 0.0
+#     estimator = zeros(Float64,tiancheng.num_arms)
+#     init :: Float64 = 1.0 
 #     for i in 1:n_rounds
 #         if i % 1000000 == 0
 #             println("Thread $tid in Monte Carlo iteration $monte inner round $i of task $name")
 #         end   
 #         if init > 0.0
-#             broad.probs .= ones(Float32,n_arms) ./ n_arms
+#             broad.probs .= ones(Float64,n_arms) ./ n_arms
 #             init = -1.0
 #         end  
        
 #         chosen_arm = select_arm(tiancheng)
 #         weights[i,:] = tiancheng.probs .+ 0.0
-#         reward = (randomness[i] < reward_distributions[chosen_arm]) * Float32(2.0)  # Optimize random binomial
+#         reward = (randomness[i] < reward_distributions[chosen_arm]) * Float64(2.0)  # Optimize random binomial
 #         update!!(tiancheng, chosen_arm, reward, n_rounds)
 #         rewards[i] += tiancheng.reward[1]
 #         pulls[i, :] .= pulls[i, :] .+ tiancheng.counts
@@ -564,61 +593,61 @@ end
 function main(n_rounds::Int32,n_montecarlo::Int32, n_arms::Int32)
     # Main code for running the algorithms and plotting the results
 
-    reward_distributions = ones(Float32,n_arms)*Float32(0.2) 
-    reward_distributions[1] = 0.0
+    reward_distributions = ones(Float64,n_arms)*Float64(0.4) 
+    reward_distributions[1] = 0.2
 
 
    # 0.01 4 
 
 
-    # Use Float32 for larger data arrays to optimize memory usage
-    cumulative_reward = zeros(Float32, n_rounds)
-    average_pulls = zeros(Float32, n_rounds, n_arms)
+    # Use Float64 for larger data arrays to optimize memory usage
+    cumulative_reward = zeros(Float64, n_rounds)
+    average_pulls = zeros(Float64, n_rounds, n_arms)
 
-    cumulative_reward_1 = zeros(Float32, n_rounds)
-    average_pulls_1 = zeros(Float32, n_rounds, n_arms)
+    cumulative_reward_1 = zeros(Float64, n_rounds)
+    average_pulls_1 = zeros(Float64, n_rounds, n_arms)
 
-    cumulative_reward_2 = zeros(Float32, n_rounds)
-    average_pulls_2 = zeros(Float32, n_rounds, n_arms)
+    cumulative_reward_2 = zeros(Float64, n_rounds)
+    average_pulls_2 = zeros(Float64, n_rounds, n_arms)
 
-    cumulative_reward_3 = zeros(Float32, n_rounds)
-    average_pulls_3 = zeros(Float32, n_rounds, n_arms)
+    cumulative_reward_3 = zeros(Float64, n_rounds)
+    average_pulls_3 = zeros(Float64, n_rounds, n_arms)
 
-    cumulative_reward_4 = zeros(Float32, n_rounds)
-    average_pulls_4 = zeros(Float32, n_rounds, n_arms)
+    cumulative_reward_4 = zeros(Float64, n_rounds)
+    average_pulls_4 = zeros(Float64, n_rounds, n_arms)
 
-    cumulative_reward_5 = zeros(Float32, n_rounds)
-    average_pulls_5 = zeros(Float32, n_rounds, n_arms)
+    cumulative_reward_5 = zeros(Float64, n_rounds)
+    average_pulls_5 = zeros(Float64, n_rounds, n_arms)
 
-    cumulative_reward_6 = zeros(Float32, n_rounds)
-    average_pulls_6 = zeros(Float32, n_rounds, n_arms)
+    cumulative_reward_6 = zeros(Float64, n_rounds)
+    average_pulls_6 = zeros(Float64, n_rounds, n_arms)
 
-    # cumulative_reward_7 = zeros(Float32, n_rounds)
-    # average_pulls_7 = zeros(Float32, n_rounds, n_arms)
+    # cumulative_reward_7 = zeros(Float64, n_rounds)
+    # average_pulls_7 = zeros(Float64, n_rounds, n_arms)
 
-    importance_estimator_1 = zeros(Float32, n_rounds, n_arms)
-    importance_estimator_2 = zeros(Float32, n_rounds, n_arms)
-    importance_estimator_3 = zeros(Float32, n_rounds, n_arms)
-    importance_estimator_4 = zeros(Float32, n_rounds, n_arms)
-    importance_estimator_5 = zeros(Float32, n_rounds, n_arms)
-    importance_estimator_6 = zeros(Float32, n_rounds, n_arms)
-    # importance_estimator_7 = zeros(Float32, n_rounds, n_arms)
+    importance_estimator_1 = zeros(Float64, n_rounds, n_arms)
+    importance_estimator_2 = zeros(Float64, n_rounds, n_arms)
+    importance_estimator_3 = zeros(Float64, n_rounds, n_arms)
+    importance_estimator_4 = zeros(Float64, n_rounds, n_arms)
+    importance_estimator_5 = zeros(Float64, n_rounds, n_arms)
+    importance_estimator_6 = zeros(Float64, n_rounds, n_arms)
+    # importance_estimator_7 = zeros(Float64, n_rounds, n_arms)
 
-    weights_1 = zeros(Float32, n_rounds, n_arms)
-    weights_2 = zeros(Float32, n_rounds, n_arms)
-    weights_3 = zeros(Float32, n_rounds, n_arms)
-    weights_4 = zeros(Float32, n_rounds, n_arms)
-    weights_5 = zeros(Float32, n_rounds, n_arms)
-    weights_6 = zeros(Float32, n_rounds, n_arms)
-    # weights_7 = zeros(Float32, n_rounds, n_arms)
+    weights_1 = zeros(Float64, n_rounds, n_arms)
+    weights_2 = zeros(Float64, n_rounds, n_arms)
+    weights_3 = zeros(Float64, n_rounds, n_arms)
+    weights_4 = zeros(Float64, n_rounds, n_arms)
+    weights_5 = zeros(Float64, n_rounds, n_arms)
+    weights_6 = zeros(Float64, n_rounds, n_arms)
+    # weights_7 = zeros(Float64, n_rounds, n_arms)
 
-    test_estimator_1 = zeros(Float32, n_rounds, n_arms)
-    test_estimator_2 = zeros(Float32, n_rounds, n_arms)
-    test_estimator_3 = zeros(Float32, n_rounds, n_arms)
-    test_estimator_4 = zeros(Float32, n_rounds, n_arms)
-    test_estimator_5 = zeros(Float32, n_rounds, n_arms)
-    test_estimator_6 = zeros(Float32, n_rounds, n_arms)
-    # test_estimator_7 = zeros(Float32, n_rounds, n_arms)
+    test_estimator_1 = zeros(Float64, n_rounds, n_arms)
+    test_estimator_2 = zeros(Float64, n_rounds, n_arms)
+    test_estimator_3 = zeros(Float64, n_rounds, n_arms)
+    test_estimator_4 = zeros(Float64, n_rounds, n_arms)
+    test_estimator_5 = zeros(Float64, n_rounds, n_arms)
+    test_estimator_6 = zeros(Float64, n_rounds, n_arms)
+    # test_estimator_7 = zeros(Float64, n_rounds, n_arms)
 
 
 
@@ -669,58 +698,58 @@ function main(n_rounds::Int32,n_montecarlo::Int32, n_arms::Int32)
     @threads for i in 1:n_montecarlo
         tid = threadid()
         println("Thread $tid starting Monte Carlo iteration $i")
-        local_cumulative_reward = zeros(Float32,n_rounds)
-        local_average_pulls = zeros(Float32,n_rounds, n_arms)
+        local_cumulative_reward = zeros(Float64,n_rounds)
+        local_average_pulls = zeros(Float64,n_rounds, n_arms)
 
-        local_cumulative_reward_1 = zeros(Float32,n_rounds)
-        local_average_pulls_1 = zeros(Float32,n_rounds, n_arms)
+        local_cumulative_reward_1 = zeros(Float64,n_rounds)
+        local_average_pulls_1 = zeros(Float64,n_rounds, n_arms)
 
-        local_cumulative_reward_2 = zeros(Float32,n_rounds)
-        local_average_pulls_2 = zeros(Float32,n_rounds, n_arms)
+        local_cumulative_reward_2 = zeros(Float64,n_rounds)
+        local_average_pulls_2 = zeros(Float64,n_rounds, n_arms)
 
-        local_cumulative_reward_3 = zeros(Float32,n_rounds)
-        local_average_pulls_3 = zeros(Float32,n_rounds, n_arms)
+        local_cumulative_reward_3 = zeros(Float64,n_rounds)
+        local_average_pulls_3 = zeros(Float64,n_rounds, n_arms)
 
-        local_cumulative_reward_4 = zeros(Float32,n_rounds)
-        local_average_pulls_4 = zeros(Float32,n_rounds, n_arms)
+        local_cumulative_reward_4 = zeros(Float64,n_rounds)
+        local_average_pulls_4 = zeros(Float64,n_rounds, n_arms)
 
-        local_cumulative_reward_5 = zeros(Float32,n_rounds)
-        local_average_pulls_5 = zeros(Float32,n_rounds, n_arms)
+        local_cumulative_reward_5 = zeros(Float64,n_rounds)
+        local_average_pulls_5 = zeros(Float64,n_rounds, n_arms)
 
-        local_cumulative_reward_6 = zeros(Float32,n_rounds)
-        local_average_pulls_6 = zeros(Float32,n_rounds, n_arms)
+        local_cumulative_reward_6 = zeros(Float64,n_rounds)
+        local_average_pulls_6 = zeros(Float64,n_rounds, n_arms)
 
-        # local_cumulative_reward_7 = zeros(Float32,n_rounds)
-        # local_average_pulls_7 = zeros(Float32,n_rounds, n_arms)
+        # local_cumulative_reward_7 = zeros(Float64,n_rounds)
+        # local_average_pulls_7 = zeros(Float64,n_rounds, n_arms)
 
-        local_importance_estimator_1 = zeros(Float32,n_rounds, n_arms)
-        local_importance_estimator_2 = zeros(Float32,n_rounds, n_arms)
-        local_importance_estimator_3 = zeros(Float32,n_rounds, n_arms)
-        local_importance_estimator_4 = zeros(Float32,n_rounds, n_arms)
-        local_importance_estimator_5 = zeros(Float32,n_rounds, n_arms)
-        local_importance_estimator_6 = zeros(Float32,n_rounds, n_arms)
-        # local_importance_estimator_7 = zeros(Float32,n_rounds, n_arms)
+        local_importance_estimator_1 = zeros(Float64,n_rounds, n_arms)
+        local_importance_estimator_2 = zeros(Float64,n_rounds, n_arms)
+        local_importance_estimator_3 = zeros(Float64,n_rounds, n_arms)
+        local_importance_estimator_4 = zeros(Float64,n_rounds, n_arms)
+        local_importance_estimator_5 = zeros(Float64,n_rounds, n_arms)
+        local_importance_estimator_6 = zeros(Float64,n_rounds, n_arms)
+        # local_importance_estimator_7 = zeros(Float64,n_rounds, n_arms)
 
-        local_weights_1 = zeros(Float32,n_rounds, n_arms)
-        local_weights_2 = zeros(Float32,n_rounds, n_arms)
-        local_weights_3 = zeros(Float32,n_rounds, n_arms)
-        local_weights_4 = zeros(Float32,n_rounds, n_arms)
-        local_weights_5 = zeros(Float32,n_rounds, n_arms)
-        local_weights_6 = zeros(Float32,n_rounds, n_arms)
-        # local_weights_7 = zeros(Float32,n_rounds, n_arms)
+        local_weights_1 = zeros(Float64,n_rounds, n_arms)
+        local_weights_2 = zeros(Float64,n_rounds, n_arms)
+        local_weights_3 = zeros(Float64,n_rounds, n_arms)
+        local_weights_4 = zeros(Float64,n_rounds, n_arms)
+        local_weights_5 = zeros(Float64,n_rounds, n_arms)
+        local_weights_6 = zeros(Float64,n_rounds, n_arms)
+        # local_weights_7 = zeros(Float64,n_rounds, n_arms)
 
-        local_test_estimator_1 = zeros(Float32,n_rounds, n_arms)
-        local_test_estimator_2 = zeros(Float32,n_rounds, n_arms)
-        local_test_estimator_3 = zeros(Float32,n_rounds, n_arms)
-        local_test_estimator_4 = zeros(Float32,n_rounds, n_arms)
-        local_test_estimator_5 = zeros(Float32,n_rounds, n_arms)
-        local_test_estimator_6 = zeros(Float32,n_rounds, n_arms)
-        # local_test_estimator_7 = zeros(Float32,n_rounds, n_arms)
+        local_test_estimator_1 = zeros(Float64,n_rounds, n_arms)
+        local_test_estimator_2 = zeros(Float64,n_rounds, n_arms)
+        local_test_estimator_3 = zeros(Float64,n_rounds, n_arms)
+        local_test_estimator_4 = zeros(Float64,n_rounds, n_arms)
+        local_test_estimator_5 = zeros(Float64,n_rounds, n_arms)
+        local_test_estimator_6 = zeros(Float64,n_rounds, n_arms)
+        # local_test_estimator_7 = zeros(Float64,n_rounds, n_arms)
 
         # Set the random seed for each thread
         Random.seed!(tid)
         # Create Randomness for each inner round
-        randomness = rand(Float32, n_rounds)
+        randomness = rand(Float64, n_rounds)
         # Run the algorithms and accumulate results locally
         run_ucb_algorithm(Int32(tid),Int32(i),n_arms, n_rounds, reward_distributions, local_cumulative_reward, local_average_pulls,name[1],randomness)
         run_exp3_algorithm(Int32(tid),Int32(i),n_arms, n_rounds, reward_distributions, Int32(0), local_cumulative_reward_1, local_average_pulls_1,name[2],randomness, local_importance_estimator_1, local_weights_1, local_test_estimator_1)
@@ -824,14 +853,14 @@ function main(n_rounds::Int32,n_montecarlo::Int32, n_arms::Int32)
     test_estimator_6 ./= n_montecarlo
     # test_estimator_7 ./= n_montecarlo
 
-    pseudo_regret = cumulative_reward - (1:n_rounds) .* (minimum(reward_distributions) * Float32(2.0))
-    pseudo_regret_1 = cumulative_reward_1 - (1:n_rounds) .* (minimum(reward_distributions) * Float32(2.0))
-    pseudo_regret_2 = cumulative_reward_2 - (1:n_rounds) .* (minimum(reward_distributions) * Float32(2.0))
-    pseudo_regret_3 = cumulative_reward_3 - (1:n_rounds) .* (minimum(reward_distributions) * Float32(2.0))
-    pseudo_regret_4 = cumulative_reward_4 - (1:n_rounds) .* (minimum(reward_distributions) * Float32(2.0))
-    pseudo_regret_5 = cumulative_reward_5 - (1:n_rounds) .* (minimum(reward_distributions) * Float32(2.0))
-    pseudo_regret_6 = cumulative_reward_6 - (1:n_rounds) .* (minimum(reward_distributions) * Float32(2.0))
-    # pseudo_regret_7 = cumulative_reward_7 - (1:n_rounds) .* (minimum(reward_distributions) * Float32(2.0))
+    pseudo_regret = cumulative_reward - (1:n_rounds) .* (minimum(reward_distributions) * Float64(2.0))
+    pseudo_regret_1 = cumulative_reward_1 - (1:n_rounds) .* (minimum(reward_distributions) * Float64(2.0))
+    pseudo_regret_2 = cumulative_reward_2 - (1:n_rounds) .* (minimum(reward_distributions) * Float64(2.0))
+    pseudo_regret_3 = cumulative_reward_3 - (1:n_rounds) .* (minimum(reward_distributions) * Float64(2.0))
+    pseudo_regret_4 = cumulative_reward_4 - (1:n_rounds) .* (minimum(reward_distributions) * Float64(2.0))
+    pseudo_regret_5 = cumulative_reward_5 - (1:n_rounds) .* (minimum(reward_distributions) * Float64(2.0))
+    pseudo_regret_6 = cumulative_reward_6 - (1:n_rounds) .* (minimum(reward_distributions) * Float64(2.0))
+    # pseudo_regret_7 = cumulative_reward_7 - (1:n_rounds) .* (minimum(reward_distributions) * Float64(2.0))
     gap1 = sort(reward_distributions) 
     gap = gap1[2] - gap1[1]
     # Plotting the pseudo-regret and save to bin file
