@@ -1,2 +1,2 @@
 # BanditAlgorithms
-Implementation of Exp3 varieants, UCB1, Tsallisinf and Log-Barrier in julia.
+Implementation of Exp3 variants, UCB1, TsallisINF and Log-Barrier in Julia.
